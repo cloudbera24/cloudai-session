@@ -5,85 +5,58 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cloud-AI Pair Code</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family: Arial, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             display: flex;
             justify-content: center;
             align-items: center;
+            margin: 0;
         }
         .container {
             background: white;
             border-radius: 20px;
             padding: 40px;
             text-align: center;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            max-width: 450px;
+            max-width: 400px;
             width: 90%;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
         }
         h1 { color: #667eea; margin-bottom: 10px; }
-        .subtitle { color: #666; margin-bottom: 30px; }
         input {
             width: 100%;
             padding: 15px;
-            border: 2px solid #e0e0e0;
+            border: 2px solid #ddd;
             border-radius: 10px;
             font-size: 16px;
-            margin-bottom: 20px;
-            text-align: center;
-        }
-        input:focus {
-            outline: none;
-            border-color: #667eea;
+            margin: 20px 0;
+            box-sizing: border-box;
         }
         button {
             width: 100%;
             padding: 15px;
-            background: linear-gradient(135deg, #667eea, #764ba2);
+            background: #667eea;
             color: white;
             border: none;
             border-radius: 10px;
             font-size: 16px;
-            font-weight: bold;
             cursor: pointer;
-            transition: transform 0.2s;
         }
-        button:hover { transform: translateY(-2px); }
-        button:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-        .result {
-            margin-top: 20px;
-            padding: 20px;
-            background: #f0f0f0;
-            border-radius: 10px;
-            display: none;
-        }
+        button:disabled { opacity: 0.6; }
         .code {
-            font-size: 28px;
+            font-size: 32px;
             font-weight: bold;
             color: #667eea;
-            letter-spacing: 5px;
-            margin: 15px 0;
+            margin: 20px 0;
         }
-        .back-link {
-            display: inline-block;
-            margin-top: 20px;
-            color: #667eea;
-            text-decoration: none;
-        }
+        .result { display: none; margin-top: 20px; }
+        .error { color: red; display: none; margin: 10px 0; }
         .loader {
             display: inline-block;
             width: 20px;
             height: 20px;
-            border: 3px solid #f3f3f3;
+            border: 3px solid #fff;
             border-top: 3px solid #667eea;
             border-radius: 50%;
             animation: spin 1s linear infinite;
@@ -92,73 +65,60 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
-        .error {
-            color: #e74c3c;
-            margin-top: 10px;
-            display: none;
-        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🔐 Pair Code Login</h1>
-        <p class="subtitle">Enter your WhatsApp number</p>
+        <h1>🔐 CLOUD-AI PAIR CODE</h1>
+        <p>Enter your WhatsApp number (no + sign)</p>
         
-        <input type="text" id="phone" placeholder="e.g., 254712345678" inputmode="numeric">
-        <button id="submitBtn">Get Pair Code</button>
+        <input type="text" id="phone" placeholder="e.g., 254712345678">
+        <button id="submit">GET CODE</button>
         
-        <div class="error" id="errorMsg">Please enter a valid phone number</div>
+        <div class="error" id="error">Invalid phone number</div>
         
         <div class="result" id="result">
             <p>Your pairing code is:</p>
             <div class="code" id="pairCode"></div>
-            <p>Enter this code in WhatsApp<br>Linked Devices → Link with phone number</p>
-            <a href="/" class="back-link">← Back to Home</a>
+            <p>Enter this code in WhatsApp:<br>Settings → Linked Devices → Link with phone number</p>
         </div>
-        
-        <a href="/" class="back-link" style="margin-top: 20px; display: inline-block;">← Back to Home</a>
     </div>
 
     <script>
-        const phoneInput = document.getElementById('phone');
-        const submitBtn = document.getElementById('submitBtn');
+        const phone = document.getElementById('phone');
+        const submit = document.getElementById('submit');
         const resultDiv = document.getElementById('result');
         const pairCodeDiv = document.getElementById('pairCode');
-        const errorMsg = document.getElementById('errorMsg');
+        const errorDiv = document.getElementById('error');
 
-        submitBtn.addEventListener('click', async () => {
-            let phone = phoneInput.value.trim();
-            phone = phone.replace(/\D/g, '');
+        submit.addEventListener('click', async () => {
+            let number = phone.value.trim().replace(/\D/g, '');
             
-            if (phone.length < 10 || phone.length > 15) {
-                errorMsg.style.display = 'block';
+            if (number.length < 10 || number.length > 15) {
+                errorDiv.style.display = 'block';
                 return;
             }
             
-            errorMsg.style.display = 'none';
-            submitBtn.disabled = true;
-            submitBtn.innerHTML = '<span class="loader"></span> Generating...';
+            errorDiv.style.display = 'none';
+            submit.disabled = true;
+            submit.innerHTML = '<span class="loader"></span> GENERATING...';
             
             try {
-                const response = await fetch(`/code?number=${phone}`);
+                const response = await fetch(`/code?number=${number}`);
                 const data = await response.json();
                 
                 if (data.code) {
                     pairCodeDiv.textContent = data.code;
                     resultDiv.style.display = 'block';
                 } else {
-                    throw new Error('No code received');
+                    alert('Failed to get code');
                 }
-            } catch (error) {
-                alert('Error: ' + error.message);
+            } catch (err) {
+                alert('Error: ' + err.message);
             } finally {
-                submitBtn.disabled = false;
-                submitBtn.innerHTML = 'Get Pair Code';
+                submit.disabled = false;
+                submit.innerHTML = 'GET CODE';
             }
-        });
-        
-        phoneInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') submitBtn.click();
         });
     </script>
 </body>
