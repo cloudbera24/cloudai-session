@@ -1,16 +1,15 @@
 const { 
     generateSessionId,
     removeFile,
-    generateRandomCode,
-    ensureDir
+    generateRandomCode
 } = require('../gift');
-const express = require('express');
-const fs = require('fs-extra');
-const path = require('path');
 const zlib = require('zlib');
+const express = require('express');
+const fs = require('fs');
+const path = require('path');
+let router = express.Router();
 const pino = require("pino");
 const { File } = require('megajs');
-
 const {
     default: makeWASocket,
     useMultiFileAuthState,
@@ -21,96 +20,58 @@ const {
     DisconnectReason
 } = require("@whiskeysockets/baileys");
 
-const router = express.Router();
-const sessionDir = path.join(__dirname, '..', 'temp_sessions');
+const sessionDir = path.join(__dirname, "session");
 
-// Ensure session directory exists
-ensureDir(sessionDir);
+// Create session directory if not exists
+if (!fs.existsSync(sessionDir)) {
+    fs.mkdirSync(sessionDir, { recursive: true });
+}
 
-// MEGA Credentials (Create a free MEGA account for this)
+// MEGA credentials (optional - for anonymous upload)
 const MEGA_EMAIL = process.env.MEGA_EMAIL || '';
 const MEGA_PASSWORD = process.env.MEGA_PASSWORD || '';
 
-/**
- * Upload session file to MEGA.nz
- * Returns file ID and decryption key in format: CLOUD-AI~fileID#key
- */
-async function uploadToMega(sessionData, sessionId) {
+async function uploadToMega(sessionData) {
     try {
-        console.log('📤 Uploading session to MEGA...');
+        console.log('📤 Uploading to MEGA...');
         
-        // Create temporary file
-        const tempFilePath = path.join(sessionDir, `${sessionId}_creds.json`);
-        await fs.writeFile(tempFilePath, sessionData);
-        
-        // Upload to MEGA
         let file;
-        
         if (MEGA_EMAIL && MEGA_PASSWORD) {
-            // Login to MEGA account
             const megaStorage = await File.fromURL('https://mega.nz/').login(MEGA_EMAIL, MEGA_PASSWORD);
-            file = await megaStorage.upload(`session_${sessionId}.json`, sessionData);
+            file = await megaStorage.upload(`session_${Date.now()}.json`, sessionData);
         } else {
-            // Anonymous upload (file expires after ~30 days)
             const { upload } = require('megajs');
-            file = await upload(sessionData, { name: `session_${sessionId}.json` });
+            file = await upload(sessionData, { name: `session_${Date.now()}.json` });
         }
         
-        // Get file link
         const fileLink = await file.link();
-        
-        // Parse file ID and key from URL
-        // Format: https://mega.nz/file/FILEID#DECRYPTKEY
         const match = fileLink.match(/\/file\/([^#]+)#(.+)/);
         
         if (match) {
-            const fileId = match[1];
-            const decryptKey = match[2];
-            const megaSessionString = `CLOUD-AI~${fileId}#${decryptKey}`;
-            
-            console.log('✅ MEGA upload successful!');
-            console.log(`   File ID: ${fileId}`);
-            console.log(`   Key: ${decryptKey}`);
-            
-            // Clean up temp file
-            await fs.remove(tempFilePath).catch(() => {});
-            
-            return {
-                success: true,
-                fileId: fileId,
-                decryptKey: decryptKey,
-                sessionString: megaSessionString
-            };
-        } else {
-            throw new Error('Failed to parse MEGA link');
+            const sessionString = `CLOUD-AI~${match[1]}#${match[2]}`;
+            console.log('✅ MEGA upload successful');
+            return sessionString;
         }
-        
+        return null;
     } catch (error) {
-        console.error('❌ MEGA upload error:', error.message);
-        
-        // Fallback: Create local file link (for development)
-        const localFilePath = path.join(sessionDir, `${sessionId}_creds.json`);
-        return {
-            success: true,
-            fileId: 'local',
-            decryptKey: 'local',
-            sessionString: `CLOUD-AI~local#${sessionId}`,
-            localFile: localFilePath,
-            isLocal: true
-        };
+        console.error('MEGA upload error:', error.message);
+        return null;
     }
 }
 
 router.get('/', async (req, res) => {
-    const sessionId = generateSessionId(8);
-    let phoneNumber = req.query.number;
+    const id = generateSessionId(8);
+    let num = req.query.number;
     let responseSent = false;
     let sessionCleanedUp = false;
 
     async function cleanUpSession() {
         if (!sessionCleanedUp) {
             try {
-                await removeFile(path.join(sessionDir, sessionId));
+                const sessionPath = path.join(sessionDir, id);
+                if (fs.existsSync(sessionPath)) {
+                    await fs.promises.rm(sessionPath, { recursive: true, force: true });
+                }
             } catch (error) {
                 console.error("Cleanup error:", error);
             }
@@ -119,17 +80,17 @@ router.get('/', async (req, res) => {
     }
 
     async function startPairing() {
+        const { version } = await fetchLatestBaileysVersion();
+        console.log(`Using WA v${version.join('.')}`);
+        
+        const { state, saveCreds } = await useMultiFileAuthState(path.join(sessionDir, id));
+        
         try {
-            const { version } = await fetchLatestBaileysVersion();
-            console.log(`📱 Using WhatsApp version: ${version.join('.')}`);
-            
-            const { state, saveCreds } = await useMultiFileAuthState(path.join(sessionDir, sessionId));
-            
             const sock = makeWASocket({
                 version,
                 auth: {
                     creds: state.creds,
-                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" }))
+                    keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }).child({ level: "fatal" })),
                 },
                 printQRInTerminal: false,
                 logger: pino({ level: "fatal" }),
@@ -141,145 +102,113 @@ router.get('/', async (req, res) => {
                 keepAliveIntervalMs: 30000
             });
 
-            // Request pairing code
             if (!sock.authState.creds.registered) {
                 await delay(1500);
-                phoneNumber = phoneNumber.replace(/[^0-9]/g, '');
+                num = num.replace(/[^0-9]/g, '');
                 
-                const pairingCode = generateRandomCode();
-                const code = await sock.requestPairingCode(phoneNumber, pairingCode);
+                const randomCode = generateRandomCode();
+                const code = await sock.requestPairingCode(num, randomCode);
                 
                 if (!responseSent && !res.headersSent) {
                     res.json({ code: code });
                     responseSent = true;
                 }
-                console.log(`📱 Pairing code sent to ${phoneNumber}: ${code}`);
+                console.log(`Pairing code sent to ${num}: ${code}`);
             }
 
-            // Handle credentials update
             sock.ev.on('creds.update', saveCreds);
-
-            // Handle connection updates
-            sock.ev.on("connection.update", async (update) => {
-                const { connection, lastDisconnect } = update;
+            
+            sock.ev.on("connection.update", async (s) => {
+                const { connection, lastDisconnect } = s;
 
                 if (connection === "open") {
-                    console.log('✅ WhatsApp connected successfully!');
+                    console.log('✅ WhatsApp connected!');
                     
-                    // Wait for session to be fully saved
-                    await delay(30000);
+                    await delay(45000);
                     
-                    // Read the session file
                     let sessionData = null;
                     let attempts = 0;
-                    const maxAttempts = 10;
+                    const maxAttempts = 15;
                     
                     while (attempts < maxAttempts && !sessionData) {
                         try {
-                            const credsPath = path.join(sessionDir, sessionId, "creds.json");
-                            if (await fs.pathExists(credsPath)) {
-                                const data = await fs.readFile(credsPath);
+                            const credsPath = path.join(sessionDir, id, "creds.json");
+                            if (fs.existsSync(credsPath)) {
+                                const data = fs.readFileSync(credsPath);
                                 if (data && data.length > 100) {
                                     sessionData = data;
-                                    console.log(`✅ Session data loaded (${data.length} bytes)`);
+                                    console.log(`✅ Session loaded (${data.length} bytes)`);
                                     break;
                                 }
                             }
-                            await delay(3000);
+                            await delay(5000);
                             attempts++;
                         } catch (error) {
                             console.error("Read error:", error);
-                            await delay(3000);
+                            await delay(5000);
                             attempts++;
                         }
                     }
 
                     if (!sessionData) {
-                        console.error('❌ Failed to read session data');
+                        console.error('❌ No session data');
                         await cleanUpSession();
                         return;
                     }
                     
                     try {
-                        // Upload to MEGA and get session string
-                        console.log('📤 Uploading session to MEGA...');
-                        const megaResult = await uploadToMega(sessionData, sessionId);
+                        // Upload to MEGA
+                        const megaSession = await uploadToMega(sessionData);
                         
-                        if (megaResult.success) {
-                            // Send session ID to user via WhatsApp
-                            const sessionMessage = `╭─────────────━┈⊷
+                        if (megaSession) {
+                            // Send session to user via WhatsApp
+                            const message = `╭─────────────━┈⊷
 │ *✅ CLOUD-AI SESSION GENERATED*
 ╰─────────────━┈⊷
 
 ╭─────────────━┈⊷
-│ *SESSION FORMAT:*
-│ \`\`\`${megaResult.sessionString}\`\`\`
-│
-│ *FILE ID:* ${megaResult.fileId}
-│ *KEY:* ${megaResult.decryptKey}
+│ *YOUR SESSION ID:*
+│ \`\`\`${megaSession}\`\`\`
 ╰─────────────━┈⊷
 
 ╭─────────────━┈⊷
 │ *HOW TO USE:*
-│ 1. Copy the session string above
+│ 1. Copy the session ID above
 │ 2. Add to your .env file:
-│    SESSION_ID="${megaResult.sessionString}"
+│    SESSION_ID="${megaSession}"
 │ 3. Restart your bot
 ╰─────────────━┈⊷
 
-> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴄʟᴏᴜᴅ-ᴀɪ*`;
+> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴄʟᴏᴜᴅ-ᴀɪ*
 
-                            await sock.sendMessage(sock.user.id, { text: sessionMessage });
-                            console.log('✅ Session ID sent to user!');
-                            
-                            // Send as copyable button
-                            await sock.sendMessage(sock.user.id, {
-                                text: `📋 *Click below to copy your session ID:*\n\n\`${megaResult.sessionString}\``,
-                                buttons: [
-                                    {
-                                        buttonId: 'copy',
-                                        buttonText: { displayText: '📋 Copy Session ID' },
-                                        type: 1
-                                    }
-                                ]
-                            });
+📋 *COPY THIS:* ${megaSession}`;
+
+                            await sock.sendMessage(sock.user.id, { text: message });
+                            console.log('✅ Session sent to user!');
                         } else {
-                            await sock.sendMessage(sock.user.id, { 
-                                text: '❌ Failed to generate session. Please try again.' 
-                            });
+                            await sock.sendMessage(sock.user.id, { text: '❌ Failed to generate session. Please try again.' });
                         }
                         
-                        await delay(5000);
+                        await delay(3000);
                         await sock.ws.close();
                         
                     } catch (error) {
-                        console.error("Session processing error:", error);
-                        await sock.sendMessage(sock.user.id, { 
-                            text: `❌ Error: ${error.message}` 
-                        });
+                        console.error("Session error:", error);
                     } finally {
                         await cleanUpSession();
                     }
                     
-                } else if (connection === "close") {
-                    const statusCode = lastDisconnect?.error?.output?.statusCode;
-                    console.log(`Connection closed with code: ${statusCode}`);
-                    
-                    if (statusCode !== DisconnectReason.loggedOut) {
-                        console.log("Reconnecting...");
-                        await delay(5000);
-                        startPairing();
-                    } else {
-                        console.log("Logged out, cleaning up...");
-                        await cleanUpSession();
-                    }
+                } else if (connection === "close" && lastDisconnect && lastDisconnect.error && lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut) {
+                    console.log("Reconnecting...");
+                    await delay(5000);
+                    startPairing();
                 }
             });
 
         } catch (error) {
             console.error("Main error:", error);
             if (!responseSent && !res.headersSent) {
-                res.status(500).json({ code: "Service temporarily unavailable" });
+                res.status(500).json({ code: "Service unavailable" });
                 responseSent = true;
             }
             await cleanUpSession();
@@ -288,11 +217,11 @@ router.get('/', async (req, res) => {
 
     try {
         await startPairing();
-    } catch (finalError) {
-        console.error("Final error:", finalError);
+    } catch (error) {
+        console.error("Final error:", error);
         await cleanUpSession();
         if (!responseSent && !res.headersSent) {
-            res.status(500).json({ code: "Service error, please try again" });
+            res.status(500).json({ code: "Error" });
         }
     }
 });
