@@ -1,11 +1,11 @@
-const fs = require('fs-extra');
-const path = require('path');
+const fs = require('fs');
 
-function generateSessionId(length = 6) {
-    const characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+function generateSessionId(num = 4) {
     let result = "";
-    for (let i = 0; i < length; i++) {
-        result += characters.charAt(Math.floor(Math.random() * characters.length));
+    let characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let charactersLength = characters.length;
+    for (let i = 0; i < num; i++) {
+        result += characters.charAt(Math.floor(Math.random() * charactersLength));
     }
     return result;
 }
@@ -19,22 +19,10 @@ function generateRandomCode() {
     return result;
 }
 
-async function removeFile(filePath) {
-    if (!fs.existsSync(filePath)) return false;
-    await fs.remove(filePath);
+async function removeFile(FilePath) {
+    if (!fs.existsSync(FilePath)) return false;
+    await fs.promises.rm(FilePath, { recursive: true, force: true });
     return true;
 }
 
-async function ensureDir(dirPath) {
-    if (!fs.existsSync(dirPath)) {
-        await fs.ensureDir(dirPath);
-    }
-    return true;
-}
-
-module.exports = {
-    generateSessionId,
-    generateRandomCode,
-    removeFile,
-    ensureDir
-};
+module.exports = { generateSessionId, removeFile, generateRandomCode };
